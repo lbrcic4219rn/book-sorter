@@ -1,15 +1,11 @@
 {
-  "library_path": "/Users/lukabrcic/Documents/books/test",
-  "supported_extensions": [".epub", ".pdf", ".mobi", ".azw3", ".azw"],
-  "llm_model": "qwen3:8b",
+  "library_path": "/Users/lukabrcic/Documents/books/test/Kolekcija Knjiga",
+  "output_path": "/Users/lukabrcic/Documents/books/test/Sorted",
+  "workers": 6,
+  "min_confidence": 0.4,
   "use_llm": true,
-  "confidence_threshold": 0.5,
-  "genre_taxonomy": [
-    "Fiction", "Non-Fiction", "Science Fiction", "Fantasy",
-    "Mystery & Thriller", "Horror", "Romance", "Historical Fiction",
-    "Biography & Memoir", "Self-Help", "Business", "History", "Science",
-    "Poetry", "Young Adult", "Children's", "Philosophy",
-    "Religion & Spirituality", "Graphic Novel & Comics", "True Crime",
-     "Classic Literature"
-   ]
+  "llm_model": "qwen3:8b",
+  "llm_mode": "auto",
+  "llm_workers": 2,
+  "convert_workers": 4
 }

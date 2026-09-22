@@ -29,3 +29,9 @@ htmlcov/
 
 # Logs
 *.log
+
+# BookSorter outputs
+.booksorter_cache.json
+report*.csv
+moves.log
+.booksorter_extracted/
