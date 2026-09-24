@@ -25,6 +25,7 @@ JUNK_NAMES = {
 JUNK_WORDS = {
     "knjiga", "knjige", "eknjige", "tom", "deo", "dio", "roman", "pripovetke", "izabrana",
     "dela", "djela", "edicija", "biblioteka", "kolekcija", "serijal", "zbirka", "pesme",
+    "antologija", "antologije", "zbornik", "almanah", "izbor", "sabrana", "celokupna",
     "priče", "price", "epub", "mobi", "pdf", "azw", "format", "formatu",
     # Serbian function words: common in titles, never in names ('Rat i mir', 'Pad u noć')
     "i", "u", "na", "za", "se", "o", "od", "do", "iz", "sa", "s", "k", "ka", "po", "pri", "bez",
@@ -134,7 +135,8 @@ _PHONETIC_RULES = [
     ("ge", "je"), ("gi", "ji"),  # soft g: George ~ Džordž
     ("tz", "c"), ("ts", "c"), ("sch", "s"), ("sh", "s"), ("ch", "k"),
     ("ph", "f"), ("th", "t"), ("ck", "k"), ("gh", ""), ("qu", "kv"), ("q", "k"), ("x", "ks"),
-    ("w", "v"), ("f", "v"), ("c", "k"),  # f/v: 'Stephen' is transcribed 'Stiven'
+    ("w", "v"), ("f", "v"), ("c", "k"), ("z", "s"),  # voicing varies in transcription:
+    # 'Stephen'/'Stiven' (f~v), 'Joseph'/'Džozef' (s~z)
 ]
 
 

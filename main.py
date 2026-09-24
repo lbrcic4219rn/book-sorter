@@ -17,7 +17,7 @@ from pathlib import Path
 
 from booksorter import formats, organize, sources
 from booksorter.cache import Cache
-from booksorter.llm import identify_author
+from booksorter.llm import identify_author, pick_author
 from booksorter.names import transliterate, appears_in, strip_credits, display_clean, looks_like_name, COMMON_FIRST_NAMES, first_name, fix_order, fold, key, same_person
 from booksorter.titles import decide_title
 from booksorter.resolve import canonicalize, decide
@@ -80,7 +80,8 @@ def load_config() -> dict:
 
 def caps_title_suspect(author: str, r: dict) -> bool:
     c = r["candidates"]
-    if len(c["filename"]) != 1 or not same_person(author, c["filename"][0]):
+    # only when the filename is ONE segment ('stepski vuk.doc'), not 'Dejvid Gemel - Legenda'
+    if r.get("name_parts", 1) > 1 or len(c["filename"]) != 1 or not same_person(author, c["filename"][0]):
         return False
     if any(any(same_person(author, n) for n in c.get(s, [])) for s in ("folder", "impressum", "swappedtags")):
         return False
@@ -183,6 +184,7 @@ def gather(book: Path, cache: Cache, llm_model: str | None = None) -> dict:
             "llm": ask_llm(book, tags, snippet, cache, llm_model) if llm_model else [],
         },
         "tags": tags,
+        "name_parts": sources.filename_parts(origin),
         "groups": sources.author_groups(book, tags),
     }
 
@@ -236,6 +238,15 @@ def scan(args, cfg):
     first_names.discard("")
 
     threshold = cfg.get("min_confidence", 0.4)
+
+    def ask_pick(r, options):
+        field = f"pick:{llm}:{'|'.join(options)}"
+        choice = cache.get(r["book"], field)
+        if choice is None:
+            choice = pick_author(options, r["snippet"], r["book"].name, llm) or ""
+            cache.set(r["book"], field, choice)
+        return [choice] if choice else []
+
     for r in records:
         r["decision"] = decide(r["candidates"], r["snippet"], library_counts, r["title"], first_names, r["groups"])
 
@@ -261,6 +272,21 @@ def scan(args, cfg):
                 order_counts[n] += 2 if src in ("impressum", "llm") else 1
 
     name_overrides, file_overrides = load_overrides()
+
+    # Last resort: hand the shortlist to the LLM and let it point at the author.
+    if llm:
+        unsure = [r for r in records if r["decision"].confidence < threshold and len(r["decision"].candidates) > 1]
+        print(f"LLM tie-break on {len(unsure)} books that are still unclear")
+        with ThreadPoolExecutor(cfg.get("llm_workers", 2)) as pool:
+            futures = {pool.submit(ask_pick, r, [c for c, _ in r["decision"].candidates][:6]): r for r in unsure}
+            for i, f in enumerate(as_completed(futures), 1):
+                r = futures[f]
+                r["candidates"]["llmpick"] = f.result()
+                r["decision"] = decide(r["candidates"], r["snippet"], library_counts, r["title"],
+                                       first_names, r["groups"])
+                if i % 25 == 0 or i == len(unsure):
+                    print(f"  pick {i}/{len(unsure)}")
+                    cache.save()
 
     # A name that only a one-part filename gives, and which the book prints in CAPITALS at the
     # start, is its title ('stepski vuk.doc' -> 'STEPSKI VUK Ovo je knjiga…'): send to review.

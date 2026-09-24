@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from booksorter.names import looks_serbian_transcribed, is_initial, tokens, strip_credits, first_name, appears_in, foreignness, fold, has_diacritics, is_title_like, key, same_person
 
-WEIGHTS = {"tags": 3, "filename": 2, "folder": 2, "text": 2, "library": 3, "name": 2, "pdftags": 1, "llm": 3, "swappedtags": 2, "impressum": 4}
+WEIGHTS = {"tags": 3, "filename": 2, "folder": 2, "text": 2, "library": 3, "name": 2, "pdftags": 1, "llm": 3, "swappedtags": 2, "impressum": 4, "llmpick": 3}
 MAX_SCORE = sum(WEIGHTS.values()) - WEIGHTS["pdftags"] - WEIGHTS["swappedtags"] - WEIGHTS["impressum"]
 
 

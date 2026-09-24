@@ -43,3 +43,34 @@ def identify_author(filename: str, folder: str, tags: dict, snippet: str, model:
         return author.strip() if isinstance(author, str) and author.strip() else None
     except (urllib.error.URLError, TimeoutError, ValueError, KeyError, AttributeError):
         return None
+
+
+PICK_PROMPT = """One of these candidates is the AUTHOR of the book; the others are usually the title, a series name, a translator or a publisher. Books are mostly Serbian/Croatian/Bosnian, often translations of foreign authors.
+
+File name: {filename}
+Candidates:
+{options}
+
+First pages of the book:
+\"\"\"{snippet}\"\"\"
+
+Answer with the number of the author, or null if none of them is the author.
+Respond ONLY with JSON: {{"choice": <number> or null}}"""
+
+
+def pick_author(candidates: list[str], snippet: str, filename: str, model: str) -> str | None:
+    """Choose among candidates we already have — the model cannot introduce a new name."""
+    options = "\n".join(f"{i}. {c}" for i, c in enumerate(candidates, 1))
+    prompt = PICK_PROMPT.format(filename=filename, options=options,
+                                snippet=snippet[:2500] or "(no text available)")
+    body = json.dumps({
+        "model": model, "messages": [{"role": "user", "content": prompt}],
+        "stream": False, "format": "json", "think": False, "options": {"temperature": 0},
+    }).encode()
+    req = urllib.request.Request(OLLAMA_URL, body, {"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            choice = json.loads(json.loads(resp.read())["message"]["content"]).get("choice")
+        return candidates[int(choice) - 1] if choice else None
+    except (urllib.error.URLError, TimeoutError, ValueError, KeyError, IndexError, TypeError):
+        return None

@@ -26,6 +26,11 @@ def book_stem(path: Path) -> str:
     return path.name if len(suffix) > 6 or " " in suffix[1:].strip() and len(suffix) > 6 else path.stem
 
 
+def filename_parts(path: Path) -> int:
+    """How many ' - ' separated segments the filename has (author + title = 2)."""
+    return len(re.split(r"\s*-\s+|\s+-\s*", _clean_stem(book_stem(path))))
+
+
 def from_filename(path: Path) -> list[str]:
     stem = _clean_stem(book_stem(path))
     if " - " in stem or " -" in stem or "- " in stem:

@@ -13,15 +13,19 @@ from booksorter.names import COMMON_FIRST_NAMES, key, same_person
 
 cfg = main.load_config()
 cache = Cache(main.ROOT / ".booksorter_cache.json")
+# the books may already be sorted; _Originals keeps the original folder structure (the answer key)
 root = Path(cfg["library_path"]) / "Knjige 1"
+originals = Path(cfg["output_path"]) / "_Originals" / "Knjige 1"
+if originals.exists():
+    root = originals
 records = []
 for book in main.find_books(root)[0]:
-    if cache.get(book, "text") is not None:
-        r = main.gather(book, cache)
-        if r["candidates"]["folder"]:
-            r["answer"] = r["candidates"]["folder"][0]
-            r["candidates"]["folder"] = []
-            records.append(r)
+    r = main.gather(book, cache)
+    if r["candidates"]["folder"]:
+        r["answer"] = r["candidates"]["folder"][0]
+        r["candidates"]["folder"] = []
+        records.append(r)
+cache.save()
 counts = Counter()
 for r in records:
     counts.update({key(n) for ns in r["candidates"].values() for n in ns})
