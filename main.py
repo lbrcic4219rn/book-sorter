@@ -57,8 +57,8 @@ OVERRIDES = ROOT / "overrides.csv"
 
 
 def load_overrides() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """overrides.csv: 'from,to'. 'from' is either an author spelling (every book by that person
-    gets 'to') or a file name / path fragment (that one book gets 'to')."""
+    """overrides.csv: 'from,to'. 'from' is an author spelling (every book by that person gets 'to'),
+    or 'file:<name fragment>' / a file name with an extension (that one book gets 'to')."""
     names, files = [], []
     if not OVERRIDES.exists():
         return names, files
@@ -67,8 +67,9 @@ def load_overrides() -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
             src, dst = (row.get("from") or "").strip(), (row.get("to") or "").strip()
             if not src or src.startswith("#"):
                 continue
-            is_file = "/" in src or formats.detect(Path(src)) or Path(src).suffix.lower() in (
+            is_file = src.startswith("file:") or "/" in src or Path(src).suffix.lower() in (
                 ".epub", ".pdf", ".mobi", ".azw3", ".azw", ".doc", ".docx", ".rtf", ".rar", ".zip")
+            src = src[5:].strip() if src.startswith("file:") else src
             (files if is_file else names).append((unicodedata.normalize("NFC", src), dst))
     return names, files
 

@@ -172,7 +172,7 @@ def placed_sources(log: Path) -> set[str]:
     out = set()
     for line in log.read_text(encoding="utf-8").splitlines():
         e = json.loads(line) if line.strip() else {}
-        if e.get("dest") and Path(e["dest"]).exists():
+        if e.get("src") and e.get("dest") and Path(e["dest"]).exists():
             out.add(e["src"])
     return out
 
@@ -184,6 +184,14 @@ def undo(log: Path) -> tuple[int, int]:
     entries = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
     restored = removed = 0
     for e in reversed(entries):
+        if e.get("merge"):  # put the book back in its old author folder
+            dest, back = Path(e["dest"]), Path(e["from"])
+            if dest.exists() and not back.exists():
+                back.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(dest), str(back))
+                write_tags(back, [back.parent.name], back.stem.split(" - ", 1)[-1])
+                restored += 1
+            continue
         parked, original = e.get("parked"), e.get("original")
         if parked and Path(parked).exists() and not Path(original).exists():
             Path(original).parent.mkdir(parents=True, exist_ok=True)
@@ -216,3 +224,55 @@ def prune_empty_dirs(root: Path) -> int:
             d.rmdir()
             removed += 1
     return removed
+
+
+def merge_authors(out_root: Path, target: str, sources_: list[str], log: Path) -> int:
+    """Move every book from `sources_` folders into `target`, renaming and retagging them.
+    Each move is logged so `undo` can reverse it."""
+    dest_dir = out_root / safe_name(target)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for old in sources_:
+        old_dir = out_root / safe_name(old)
+        if not old_dir.exists() or old_dir == dest_dir:
+            continue
+        for book in sorted(p for p in old_dir.iterdir() if p.is_file() and p.suffix in (".epub", ".pdf")):
+            title = book.stem.split(" - ", 1)[1] if " - " in book.stem else book.stem
+            dest = dest_dir / f"{safe_name(target + ' - ' + title)}{book.suffix}"
+            if _taken(dest):  # same book under both spellings -> keep the copy, don't clutter
+                dest = out_root / "_Duplicates" / safe_name(target) / dest.name
+            dest = _unique(dest)
+            shutil.move(str(book), str(dest))
+            write_tags(dest, [target], title)
+            log_line(log, {"merge": True, "from": str(book), "dest": str(dest), "author": target})
+            moved += 1
+    return moved
+
+
+def unplace(out_root: Path, log: Path, dests: list[Path]) -> tuple[int, int]:
+    """Send wrongly sorted books back to the library: delete the placed copy and restore the
+    original from _Originals. Used when reviewing what the sorter got wrong."""
+    entries = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    wanted = {str(d) for d in dests}
+    # a merge moved the file; follow the chain back to the entry that placed it
+    chain = {e["dest"]: e.get("from") for e in entries if e.get("merge")}
+    roots = set(wanted)
+    for dest, src in chain.items():
+        if dest in roots and src:
+            roots.add(src)
+    removed = restored = 0
+    for d in dests:
+        if d.exists():
+            d.unlink()
+            removed += 1
+    for e in reversed(entries):
+        if e.get("dest") in roots and e.get("original"):
+            original = Path(e["original"])
+            parked = next((x.get("parked") for x in entries
+                           if x.get("original") == e["original"] and x.get("parked")), None)
+            if parked and Path(parked).exists() and not original.exists():
+                original.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(parked, str(original))
+                restored += 1
+            log_line(log, {"unplaced": e["dest"], "original": e["original"]})
+    return removed, restored
