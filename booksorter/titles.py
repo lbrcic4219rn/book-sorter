@@ -46,7 +46,21 @@ def _split(stem: str) -> list[str]:
     return [stem]
 
 
+def _strip_leading_author(stem: str, authors: list[str]) -> str:
+    """'Nora Roberts-Hotel BoonsBoro-1...' -> 'Hotel BoonsBoro-1...' (any separator)."""
+    for a in sorted(authors, key=len, reverse=True):
+        at = tokens(a)
+        if not at:
+            continue
+        m = re.match(r"\s*" + r"[\s.,_-]+".join(re.escape(t) for t in at) + r"\s*[-–,:.]?\s*",
+                     fold(stem))
+        if m and m.end() < len(stem):
+            return stem[m.end():].lstrip(" -–,:.")
+    return stem
+
+
 def _strip_author(stem: str, authors: list[str]) -> str:
+    stem = _strip_leading_author(stem, authors)
     parts = _split(stem)
     if len(parts) == 1 and "-" in stem and " " not in stem:  # 'John-Grisham-Tvrtka'
         words = stem.split("-")
@@ -55,9 +69,13 @@ def _strip_author(stem: str, authors: list[str]) -> str:
                 return " ".join(words[n:])
             if _is_author(" ".join(words[-n:]), authors):
                 return " ".join(words[:-n])
-    if len(parts) == 1 and "," in stem:  # 'Колиба, Вилијам Јанг'
-        parts = [p.strip() for p in stem.split(",")]
+    if len(parts) == 1 and "," in stem:  # 'Колиба, Вилијам Јанг' — only if a piece IS the author,
+        pieces = [p.strip() for p in stem.split(",")]  # never for 'Ljubav, struja, voda i telefon'
+        if any(_is_author(p, authors) for p in pieces):
+            parts = pieces
     rest = [p for p in parts if not _is_author(p, authors)]
+    if len(rest) == len(parts):
+        return stem  # nothing was an author: keep the title exactly as written
     rest = [re.sub(r"^\d{1,3}\s*$", "", p) for p in rest]  # lone series numbers: '13 - Trag'
     rest = [re.sub(r"^\d{1,2}\s+(?=[^\d\s.])", "", p) for p in rest]  # '02 Odjek u tami' (keeps '1.', '2001')
     return " - ".join(p for p in rest if p)

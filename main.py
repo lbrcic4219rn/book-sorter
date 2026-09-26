@@ -2,6 +2,8 @@
 
   python main.py scan [--limit N] [--only SUBFOLDER]   -> report.csv (review/edit it)
   python main.py apply [--limit N] [--min-confidence X] -> moves books into output_path/<Author>/
+  python main.py genres [--limit N] [--author X]        -> write genre tags (resumable batches)
+  python main.py rename                                -> fix titles/filenames of sorted books
   python main.py undo                                   -> reverses the last apply
 """
 import argparse
@@ -15,7 +17,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from booksorter import formats, organize, sources
+from booksorter import formats, genres as genre_tags, organize, sources
 from booksorter.cache import Cache
 from booksorter.llm import identify_author, pick_author
 from booksorter.names import transliterate, appears_in, strip_credits, display_clean, looks_like_name, COMMON_FIRST_NAMES, first_name, fix_order, fold, key, same_person
@@ -400,6 +402,110 @@ def apply(args, cfg):
           f"{counts['failed']} failed (kept in library, see {log}). Originals parked: {parked}")
 
 
+def genres(args, cfg):
+    """Tag sorted books with genres. Runs in batches: every answer is cached and every book that
+    already has genres is skipped, so you can stop and resume at any time."""
+    out = Path(args.output or cfg["output_path"]).expanduser()
+    taxonomy, model = cfg["genres"], cfg["llm_model"]
+    log, cache = out / "genres.log", Cache(ROOT / ".booksorter_cache.json")
+    done = set()
+    if log.exists() and not args.retag:
+        done = {json.loads(l)["book"] for l in log.read_text(encoding="utf-8").splitlines() if l.strip()}
+
+    books = [p for p in sorted(out.rglob("*")) if p.is_file() and p.suffix.lower() in (".epub", ".pdf")
+             and not p.relative_to(out).parts[0].startswith("_") and str(p) not in done]
+    if args.author:
+        books = [b for b in books if args.author.lower() in b.parent.name.lower()]
+    total_left = len(books)
+    books = books[: args.limit] if args.limit else books
+    print(f"{len(books)} books this batch ({total_left} untagged in total)")
+
+    def classify(book: Path) -> dict:
+        tags = genre_tags.read_tags(book)
+        hint = genre_tags.collection_hint(tags.get("tags", ""), cfg.get("collection_hints", {}))
+        field = f"genres:{model}:v3:{hint}"  # v3 = specific-genre prompt + collection hint
+        cached = cache.get(book, field)
+        found = cached if cached is not None else genre_tags.decide_genres(
+            book.parent.name, book.stem.split(" - ", 1)[-1], sources.first_pages(book, 1500),
+            tags, taxonomy, model, cfg.get("max_genres", 3), hint)
+        if cached is None:
+            cache.set(book, field, found)
+        entry = {"book": str(book), "genres": found, "old_tags": tags.get("tags", "")}
+        if found and not args.dry_run:
+            error = genre_tags.write_genres(book, found)
+            if error:
+                entry["error"] = error
+        return entry
+
+    counts, empty = Counter(), 0
+    with ThreadPoolExecutor(args.workers or cfg.get("genre_workers", 4)) as pool:
+        futures = [pool.submit(classify, b) for b in books]
+        for i, f in enumerate(as_completed(futures), 1):
+            entry = f.result()
+            if not args.dry_run:  # a dry run must not mark books as done
+                organize.log_line(log, entry)
+            counts.update(entry["genres"])
+            empty += not entry["genres"]
+            if i % 25 == 0 or i == len(books):
+                print(f"  {i}/{len(books)} tagged ({empty} with no genre)")
+                cache.save()
+    cache.save()
+    print(f"\nDone. Most common genres: " + ", ".join(f"{g} ({n})" for g, n in counts.most_common(8)))
+    print(f"{total_left - len(books)} books still untagged — run again to continue")
+
+
+def rename(args, cfg):
+    """Recompute each sorted book's title and fix its filename and title tag in place
+    (e.g. 'Nora Roberts - Nora Roberts-Hotel BoonsBoro-1.Sada i zauvijek')."""
+    out = Path(args.output or cfg["output_path"]).expanduser()
+    log = out / "renames.log"
+    books = [p for p in sorted(out.rglob("*")) if p.is_file() and p.suffix.lower() in (".epub", ".pdf")
+             and not p.relative_to(out).parts[0].startswith("_")]
+    books = books[: args.limit] if args.limit else books
+    changed = 0
+    for book in books:
+        author = book.parent.name
+        current = book.stem.split(" - ", 1)[-1] if book.stem.startswith(author + " - ") else book.stem
+        title = decide_title(book, None, {"title": current}, [author])
+        wanted = organize.safe_name(f"{author} - {title}") if title else book.stem
+        if wanted == book.stem or not title:
+            continue
+        dest = organize._unique(book.with_name(f"{wanted}{book.suffix}"))
+        if args.dry_run:
+            print(f"  {book.name[:60]}\n    -> {dest.name[:60]}")
+        else:
+            book.rename(dest)
+            organize.write_tags(dest, [author], title)
+            organize.log_line(log, {"renamed": str(book), "to": str(dest), "title": title})
+        changed += 1
+    print(f"{changed} of {len(books)} books renamed" + (" (dry run)" if args.dry_run else ""))
+
+
+def harmonize_genres(args, cfg):
+    """Make each author's books agree on genre, then rewrite the tags that changed."""
+    out = Path(args.output or cfg["output_path"]).expanduser()
+    log = out / "genres.log"
+    entries = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
+    by_book = {e["book"]: e["genres"] for e in entries if Path(e["book"]).exists()}
+    same_book, by_series, by_author = defaultdict(list), defaultdict(list), defaultdict(list)
+    for book in by_book:
+        p = Path(book)
+        same_book[(p.parent.name, fold(p.stem))].append(book)  # .epub and .pdf of one title
+        by_author[p.parent.name].append(book)
+        series = genre_tags.series_key(p.parent.name, p.stem)
+        if series:
+            by_series[series].append(book)
+    fixed = genre_tags.harmonize(by_book, same_book, by_series, by_author)
+    changed = 0
+    for book, new in fixed.items():
+        if new != by_book[book] and Path(book).exists():
+            genre_tags.write_genres(Path(book), new)
+            organize.log_line(log, {"book": book, "genres": new, "old_tags": ", ".join(by_book[book]),
+                                    "harmonized": True})
+            changed += 1
+    print(f"{changed} books adjusted to match the rest of their author's shelf")
+
+
 def undo(args, cfg):
     out = Path(args.output or cfg["output_path"]).expanduser()
     restored, removed = organize.undo(out / "moves.log")
@@ -419,10 +525,23 @@ def main():
     a.add_argument("--output")
     a.add_argument("--limit", type=int, help="only place the first N books (for a trial run)")
     a.add_argument("--min-confidence", type=float, default=cfg.get("min_confidence", 0.4))
+    g = sub.add_parser("genres", help="write genre tags into the sorted books, in batches")
+    g.add_argument("--limit", type=int, help="how many books to tag in this batch")
+    g.add_argument("--workers", type=int, help="parallel LLM requests (default from config)")
+    g.add_argument("--author", help="only books whose author folder matches this text")
+    g.add_argument("--output")
+    g.add_argument("--dry-run", action="store_true", help="decide genres without writing tags")
+    g.add_argument("--retag", action="store_true", help="redo books that were tagged before")
+    r = sub.add_parser("rename", help="fix filenames/titles of already sorted books")
+    r.add_argument("--output")
+    r.add_argument("--limit", type=int)
+    r.add_argument("--dry-run", action="store_true")
+    h = sub.add_parser("harmonize", help="make an author's books agree on genre")
+    h.add_argument("--output")
     u = sub.add_parser("undo", help="put everything from the last apply back")
     u.add_argument("--output")
     args = p.parse_args()
-    {"scan": scan, "apply": apply, "undo": undo}[args.cmd](args, cfg)
+    {"scan": scan, "apply": apply, "genres": genres, "rename": rename, "harmonize": harmonize_genres, "undo": undo}[args.cmd](args, cfg)
 
 
 if __name__ == "__main__":
